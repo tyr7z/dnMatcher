@@ -1,0 +1,495 @@
+﻿using dnlib.DotNet;
+using dnlib.DotNet.Writer;
+using Mono.Cecil;
+using TypeDefinition = Mono.Cecil.TypeDefinition;
+using ICustomAttributeProvider = Mono.Cecil.ICustomAttributeProvider;
+
+namespace dnMatcher
+{
+    class Program
+    {
+        private static readonly Dictionary<string, string?> typeMapping = new();
+        private static List<TypeDefinition>? newAssemblyTypes;
+
+        static bool debugEnabled = false;
+        static bool ignoreErrors = false;
+
+        static void Main(string[] args)
+        {
+            if (args.Length == 0 || args[0] == "--help")
+            {
+                PrintHelp();
+                return;
+            }
+
+            string unobfDllPath = string.Empty;
+            string dllPath = string.Empty;
+            string mappingFilePath = string.Empty;
+            string outputPath = string.Empty;
+
+            for (int i = 0; i < args.Length; i++)
+            {
+                if (args[i] == "-u" || args[i] == "--unobf-dll")
+                {
+                    if (i + 1 < args.Length)
+                        unobfDllPath = args[i + 1];
+                }
+                else if (args[i] == "-d" || args[i] == "--dll")
+                {
+                    if (i + 1 < args.Length)
+                        dllPath = args[i + 1];
+                }
+                else if (args[i] == "-m" || args[i] == "--mapping")
+                {
+                    if (i + 1 < args.Length)
+                        mappingFilePath = args[i + 1];
+                }
+                else if (args[i] == "-o" || args[i] == "--output")
+                {
+                    if (i + 1 < args.Length)
+                        outputPath = args[i + 1];
+                }
+                else if (args[i] == "--debug")
+                {
+                    debugEnabled = true;
+                }
+                else if (args[i] == "--ignore-errors")
+                {
+                    ignoreErrors = true;
+                }
+            }
+
+            if (string.IsNullOrEmpty(unobfDllPath) || string.IsNullOrEmpty(dllPath) || string.IsNullOrEmpty(mappingFilePath) || string.IsNullOrEmpty(outputPath))
+            {
+                Print("Please provide the required arguments.\n", ConsoleColor.Red);
+                PrintHelp();
+                return;
+            }
+
+            if (!File.Exists(unobfDllPath))
+            {
+                Print("DLL file not found: ", ConsoleColor.Red); Print(unobfDllPath + "\n", ConsoleColor.DarkGray);
+                return;
+            }
+
+            if (!File.Exists(dllPath))
+            {
+                Print("DLL file not found: ", ConsoleColor.Red); Print(dllPath + "\n", ConsoleColor.DarkGray);
+                return;
+            }
+
+            var oldAssembly = ModuleDefinition.ReadModule(unobfDllPath);
+            Console.WriteLine("[INFO] Loading old assembly...");
+            var newAssembly = ModuleDefinition.ReadModule(dllPath);
+            Console.WriteLine("[INFO] Loading new assembly...");
+            Console.WriteLine($"[TYPES] Old assembly has {oldAssembly.Types.Count(t => t.Namespace == string.Empty)} types in root namespace");
+            Console.WriteLine($"[TYPES] New assembly has {newAssembly.Types.Count(t => t.Namespace == string.Empty)} types in root namespace");
+            Console.WriteLine($"[TYPES] Performing type matching...");
+            newAssemblyTypes = newAssembly.Types.Where(t => t.Namespace == string.Empty).ToList();
+            foreach (var originalType in oldAssembly.Types.Where(t => t.Namespace == string.Empty).OrderBy(t => t.BaseType?.FullName != "System.Object"))
+            {
+                var obfuscatedType = FindNewType(originalType);
+                if (obfuscatedType == null)
+                {
+                    Console.WriteLine("[TYPES] Could not find suitable match for " + originalType);
+                    continue;
+                }
+                typeMapping.Add(originalType.FullName, obfuscatedType.FullName);
+                //Console.WriteLine($"{originalType} = {obfuscatedType}");
+            }
+            Console.WriteLine($"[TYPES] Matched {typeMapping.Count} types between both assemblies.");
+            string filePath = Path.Combine(Directory.GetCurrentDirectory(), mappingFilePath);
+            using (StreamWriter writer = new StreamWriter(filePath))
+            {
+                foreach (KeyValuePair<string, string?> kvp in typeMapping)
+                {
+                    writer.WriteLine($"{kvp.Key} -> {kvp.Value}");
+                }
+            }
+            Console.WriteLine($"[TYPES] Mapping dictionary written to file: {filePath}");
+            var firstType = oldAssembly.Types.First(t => t.FullName == typeMapping.First().Key);
+            foreach (var method in firstType.Methods)
+            {
+                Console.WriteLine(method);
+            }
+
+            Dictionary<string, string> mapping = LoadMapping(mappingFilePath);
+
+            if (mapping.Count == 0)
+            {
+                Print("Mapping file is empty or invalid.", ConsoleColor.Red);
+                return;
+            }
+
+            try
+            {
+                ModuleDefMD module = ModuleDefMD.Load(dllPath);
+
+                foreach (var type in module.Types)
+                {
+                    string? deobfuscatedTypeName = GetDeobfuscatedString(mapping, type.Name);
+                    if (!string.IsNullOrEmpty(deobfuscatedTypeName))
+                    {
+                        Debug($"Type: {type.Name} -> {deobfuscatedTypeName}");
+                        type.Name = deobfuscatedTypeName;
+                    }
+
+                    foreach (var method in type.Methods)
+                    {
+                        string? deobfuscatedMethodName = GetDeobfuscatedString(mapping, method.Name);
+                        if (!string.IsNullOrEmpty(deobfuscatedMethodName))
+                        {
+                            Debug($"Method: {method.Name} -> {deobfuscatedMethodName}");
+                            method.Name = deobfuscatedMethodName;
+                            SetCilBodyKeepOldMaxStack(method);
+                        }
+
+                        foreach (var parameter in method.Parameters)
+                        {
+                            string? deobfuscatedParameterName = GetDeobfuscatedString(mapping, parameter.Name);
+                            if (!string.IsNullOrEmpty(deobfuscatedParameterName))
+                            {
+                                Debug($"Parameter: {parameter.Name} -> {deobfuscatedParameterName}");
+                                parameter.Name = deobfuscatedParameterName;
+                            }
+                        }
+                    }
+
+                    foreach (var field in type.Fields)
+                    {
+                        string? deobfuscatedFieldName = GetDeobfuscatedString(mapping, field.Name);
+                        if (!string.IsNullOrEmpty(deobfuscatedFieldName))
+                        {
+                            Debug($"Field: {field.Name} -> {deobfuscatedFieldName}");
+                            field.Name = deobfuscatedFieldName;
+                        }
+                    }
+
+                    foreach (var property in type.Properties)
+                    {
+                        string? deobfuscatedPropertyName = GetDeobfuscatedString(mapping, property.Name);
+                        if (!string.IsNullOrEmpty(deobfuscatedPropertyName))
+                        {
+                            Debug($"Property: {property.Name} -> {deobfuscatedPropertyName}");
+                            property.Name = deobfuscatedPropertyName;
+                        }
+                    }
+                }
+
+                if (ignoreErrors)
+                {
+                    ModuleWriterOptions writerOptions = new(module);
+                    writerOptions.MetadataOptions.Flags |= MetadataFlags.KeepOldMaxStack;
+
+                    module.Write(outputPath, writerOptions);
+                    Print("Deobfuscation completed successfully!\n", ConsoleColor.Green);
+                }
+                else
+                {
+                    try
+                    {
+                        module.Write(outputPath);
+                        Print("Deobfuscation completed successfully!\n", ConsoleColor.Green);
+                    }
+                    catch (Exception ex)
+                    {
+                        Print("Error occurred during writing the output DLL file: ", ConsoleColor.Red); Print(ex.Message + "\n", ConsoleColor.DarkGray);
+                        Print("\nTry using the ", ConsoleColor.Yellow); Print("--ignore-errors", ConsoleColor.DarkYellow); Print(" argument!\n", ConsoleColor.Yellow);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                if (ignoreErrors)
+                {
+                    Print("An error occurred during deobfuscation, but it was ignored: ", ConsoleColor.Yellow); Print(ex.Message + "\n", ConsoleColor.DarkGray);
+                    Console.WriteLine("Deobfuscation completed with errors!");
+                }
+                else
+                {
+                    Print("Error occurred during deobfuscation: ", ConsoleColor.Red); Print(ex.Message + "\n", ConsoleColor.DarkGray);
+                    Print("\nTry using the ", ConsoleColor.Yellow); Print("--ignore-errors", ConsoleColor.DarkYellow); Print(" argument!\n", ConsoleColor.Yellow);
+                }
+            }
+        }
+
+        private static TypeDefinition? FindNewType(TypeDefinition oldType)
+        {
+            var bestSimilarity = 0.0;
+            const double lowestAllowedSimilarity = 1.15;
+            TypeDefinition? bestMatch = null;
+
+            if (newAssemblyTypes == null) return bestMatch;
+            foreach (var newType in newAssemblyTypes)
+            {
+                if (oldType.FullName == newType.FullName) return newType;
+                if (typeMapping.ContainsValue(newType.FullName)) continue;
+                var similarity = CalculateSimilarity(oldType, newType);
+                if (!(similarity > bestSimilarity) || similarity < lowestAllowedSimilarity) continue;
+                bestSimilarity = similarity;
+                bestMatch = newType;
+            }
+
+            return bestMatch;
+        }
+
+        private static double CalculateSimilarity(TypeDefinition oldType, TypeDefinition newType)
+        {
+            // Some hacks to improve matching success rate
+            if (oldType.Name != oldType.Name.ToUpper() && newType.Name != newType.Name.ToUpper())
+            {
+                if (oldType.Name != newType.Name) return 0;
+            }
+
+            // Define weights for each characteristic
+            const double inheritanceWeight = 0.35;
+            const double fieldCountWeight = 0.3;
+            const double nestedClassesCountWeight = 0.15;
+            const double methodsCountWeight = 0.2;
+            const double modifiersWeight = 0.3;
+            // const double attributeCountWeight = 0.3;
+            const double enumFieldNamesWeight = 1;
+
+            var inheritanceScore = CompareInheritance(oldType, newType);
+            var fieldCountScore = CompareFieldCount(oldType, newType);
+            var nestedClassesCountScore = CompareNestedClassesCount(oldType, newType);
+            var methodsCountScore = CompareMethodsCount(oldType, newType);
+            var modifiersScore = CompareModifiers(oldType, newType);
+            var attributeCountScore = CompareAttributeCount(oldType, newType);
+            var enumFieldNamesScore = CompareEnumFieldNames(oldType, newType);
+
+            var similarity = inheritanceWeight * inheritanceScore +
+                             fieldCountWeight * fieldCountScore +
+                             nestedClassesCountWeight * nestedClassesCountScore +
+                             methodsCountWeight * methodsCountScore +
+                             modifiersWeight * modifiersScore +
+                             enumFieldNamesWeight * enumFieldNamesScore;
+
+            return similarity;
+        }
+
+        private static double CompareInheritance(TypeDefinition oldType, TypeDefinition newType)
+        {
+            if (oldType.BaseType == null && newType.BaseType == null) return 1.0;
+
+            if (oldType.BaseType?.FullName == newType.BaseType?.FullName) return 1.0;
+
+            if (oldType.BaseType == null || newType.BaseType == null) return 0.0;
+
+            var baseTypesMatch = false;
+
+            try
+            {
+                if (!typeMapping.TryGetValue(oldType.BaseType.FullName, out var mappedBaseType) ||
+                    mappedBaseType == null) return baseTypesMatch ? 1.0 : 0.0;
+                var newBaseType = newType.BaseType.FullName;
+
+                if (newBaseType != null && mappedBaseType == newBaseType) baseTypesMatch = true;
+
+                return baseTypesMatch ? 1.0 : 0.0;
+            }
+            catch (Exception)
+            {
+                return 0.0;
+            }
+        }
+
+        private static double CompareFieldCount(TypeDefinition oldType, TypeDefinition newType)
+        {
+            var originalFieldCount = oldType.Fields.Count;
+            var obfuscatedFieldCount = newType.Fields.Count;
+
+            if (originalFieldCount == 0 && obfuscatedFieldCount == 0) return 1.0;
+
+            var fieldCountSimilarity = 0.0;
+
+            if (originalFieldCount != 0 || obfuscatedFieldCount != 0)
+                fieldCountSimilarity = (double)Math.Min(originalFieldCount, obfuscatedFieldCount) /
+                                       Math.Max(originalFieldCount, obfuscatedFieldCount);
+
+            return fieldCountSimilarity;
+        }
+
+        private static double CompareNestedClassesCount(TypeDefinition oldType, TypeDefinition newType)
+        {
+            var oldNestedClassesCount = oldType.NestedTypes.Count;
+            var newNestedClassesCount = newType.NestedTypes.Count;
+
+            if (oldNestedClassesCount == 0 && newNestedClassesCount == 0) return 1.0;
+
+            var nestedClassesCountSimilarity = 0.0;
+
+            if (oldNestedClassesCount != 0 || newNestedClassesCount != 0)
+                nestedClassesCountSimilarity = (double)Math.Min(oldNestedClassesCount, newNestedClassesCount) /
+                                               Math.Max(oldNestedClassesCount, newNestedClassesCount);
+
+            return nestedClassesCountSimilarity;
+        }
+
+        private static double CompareMethodsCount(TypeDefinition oldType, TypeDefinition newType)
+        {
+            var oldMethodsCount = oldType.Methods.Count;
+            var newMethodsCount = newType.Methods.Count;
+
+            return oldMethodsCount == newMethodsCount || (oldMethodsCount > 1 && oldMethodsCount <= newMethodsCount) ? 1.0 : 0.0;
+        }
+
+        private static double CompareModifiers(TypeDefinition oldType, TypeDefinition newType)
+        {
+            var originalIsPublic = oldType.IsPublic;
+            var obfuscatedIsPublic = newType.IsPublic;
+
+            var originalIsNotPublic = oldType.IsNotPublic;
+            var obfuscatedIsNotPublic = newType.IsNotPublic;
+
+            var originalIsInternal = oldType.IsNestedAssembly;
+            var obfuscatedIsInternal = newType.IsNestedAssembly;
+
+            var originalIsAbstract = oldType.IsAbstract;
+            var obfuscatedIsAbstract = newType.IsAbstract;
+
+            var originalIsStatic = oldType.IsSealed && oldType.IsAbstract;
+            var obfuscatedIsStatic = newType.IsSealed && newType.IsAbstract;
+
+            if (originalIsPublic && obfuscatedIsPublic &&
+                originalIsAbstract == obfuscatedIsAbstract &&
+                originalIsStatic == obfuscatedIsStatic)
+                return 1.0;
+
+            if (originalIsNotPublic && obfuscatedIsNotPublic &&
+                originalIsAbstract == obfuscatedIsAbstract &&
+                originalIsStatic == obfuscatedIsStatic)
+                return 1.0;
+
+            if (originalIsInternal && obfuscatedIsInternal &&
+                originalIsAbstract == obfuscatedIsAbstract &&
+                originalIsStatic == obfuscatedIsStatic)
+                return 1.0;
+
+            return 0.0;
+        }
+
+        private static double CompareAttributeCount(ICustomAttributeProvider oldType, ICustomAttributeProvider newType)
+        {
+            var oldAttributeCount = oldType.CustomAttributes.Count;
+            var newAttributeCount = newType.CustomAttributes.Count;
+
+            if (oldAttributeCount == 0 && newAttributeCount == 0)
+                return 0.0;
+
+            var attributeCountSimilarity = 0.0;
+
+            if (oldAttributeCount != 0 || newAttributeCount != 0)
+                attributeCountSimilarity = (double)Math.Min(oldAttributeCount, newAttributeCount) /
+                                           Math.Max(oldAttributeCount, newAttributeCount);
+
+            return attributeCountSimilarity;
+        }
+
+
+        private static double CompareEnumFieldNames(TypeDefinition oldType, TypeDefinition newType)
+        {
+            if (oldType.BaseType?.FullName != "System.Enum" || newType.BaseType?.FullName != "System.Enum") return 0.0;
+            var commonFieldCount = 0;
+            var index = 0;
+            for (; index < oldType.Fields.Count; index++)
+            {
+                var field = oldType.Fields[index];
+                if (!field.IsStatic || !field.IsLiteral) continue;
+                var matchingField =
+                    newType.Fields.FirstOrDefault(f => f.Name == field.Name && f.IsStatic && f.IsLiteral);
+                if (matchingField != null)
+                    commonFieldCount++;
+            }
+
+            var similarity = (double)commonFieldCount / Math.Max(oldType.Fields.Count, newType.Fields.Count);
+            return similarity;
+        }
+
+        static void SetCilBodyKeepOldMaxStack(MethodDef method)
+        {
+            if (method.Body != null && method.Body.HasInstructions)
+            {
+                var cilBody = method.Body;
+                cilBody.KeepOldMaxStack = true;
+            }
+        }
+
+        static Dictionary<string, string> LoadMapping(string mappingFilePath)
+        {
+            Dictionary<string, string> mapping = new();
+
+            if (!File.Exists(mappingFilePath))
+            {
+                Console.WriteLine("Mapping file not found: " + mappingFilePath);
+                return mapping;
+            }
+
+            string[] lines = File.ReadAllLines(mappingFilePath);
+
+            foreach (string? line in lines)
+            {
+                string[] parts = line.Split(" -> ");
+
+                if (parts.Length == 2)
+                {
+                    string obfuscatedName = parts[0].Trim();
+                    string deobfuscatedName = parts[1].Trim();
+
+                    mapping[obfuscatedName] = deobfuscatedName;
+                }
+            }
+
+            return mapping;
+        }
+
+        static string? GetDeobfuscatedString(Dictionary<string, string> mapping, string obfuscatedString)
+        {
+            foreach (var kvp in mapping)
+            {
+                if (kvp.Value == obfuscatedString)
+                    return kvp.Key;
+            }
+
+            return null;
+        }
+
+        static void PrintHelp()
+        {
+            Console.WriteLine("Usage: matcher.exe [OPTIONS]\n");
+            Console.WriteLine("Options:");
+            Print("  -u, --unobf-dll", ConsoleColor.Yellow); Print("    Path to the unobfuscated DLL file"); Print(" (required)\n", ConsoleColor.Yellow);
+            Print("  -d, --dll", ConsoleColor.Yellow); Print("          Path to the obfuscated DLL file"); Print(" (required)\n", ConsoleColor.Yellow);
+            Print("  -m, --mapping", ConsoleColor.Yellow); Print("      Path to the output mapping file"); Print(" (required)\n", ConsoleColor.Yellow);
+            Print("  -o, --output", ConsoleColor.Yellow); Print("       Path to the output file"); Print(" (required)\n", ConsoleColor.Yellow);
+            Console.WriteLine("  --debug            Enable debug logging");
+            Console.WriteLine("  --ignore-errors    Ignore errors during deobfuscation (recommended for Cpp2Il DLLs)");
+            Console.WriteLine("  --help             Display this help message");
+        }
+
+        static void Debug(string message, ConsoleColor? color = null)
+        {
+            if (debugEnabled)
+            {
+                ConsoleColor previousColor = Console.ForegroundColor;
+
+                if (color.HasValue)
+                    Console.ForegroundColor = color.Value;
+
+                Console.WriteLine("[DEBUG] " + message);
+                Console.ForegroundColor = previousColor;
+            }
+        }
+
+        static void Print(string message, ConsoleColor? color = null)
+        {
+            ConsoleColor previousColor = Console.ForegroundColor;
+
+            if (color.HasValue)
+                Console.ForegroundColor = color.Value;
+
+            Console.Write(message);
+            Console.ForegroundColor = previousColor;
+        }
+    }
+}
