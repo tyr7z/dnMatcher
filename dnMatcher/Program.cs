@@ -191,13 +191,12 @@ namespace dnMatcher
             {
                 if (!methodMapping.ContainsKey(match.Item2.MethodName))
                 {
-                    Console.WriteLine($"{match.Item2.MethodName} -> {match.Item1.MethodName}");
                     methodMapping.Add(match.Item2.MethodName, match.Item1.MethodName);
                 }
             }
             deobfAssembly.Dispose();
 
-            var mapping = typeMapping.Concat(methodMapping).ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+            var mapping = typeMapping.Union(methodMapping).GroupBy(kv => kv.Key).ToDictionary(g => g.Key, g => g.First().Value);
 
             if (ApplyMapping(tmpPath, outputPath, mapping) == 1)
                 return;
