@@ -6,9 +6,33 @@ using ICustomAttributeProvider = Mono.Cecil.ICustomAttributeProvider;
 
 namespace dnMatcher
 {
+    public class MethodDetails
+    {
+        public string TypeName { get; set; }
+        public string MethodName { get; set; }
+        public string ReturnType { get; set; }
+        public List<string> ParameterTypes { get; set; }
+        public bool IsPublic { get; set; }
+        public bool IsPrivate { get; set; }
+        public bool HasOverrides { get; set; }
+
+        public override bool Equals(object obj)
+        {
+            if (obj is MethodDetails other)
+            {
+                return ReturnType == other.ReturnType &&
+                       ParameterTypes.SequenceEqual(other.ParameterTypes) &&
+                       IsPublic == other.IsPublic &&
+                       IsPrivate == other.IsPrivate &&
+                       HasOverrides == other.HasOverrides;
+            }
+            return false;
+        }
+    }
+
     class Program
     {
-        private static readonly Dictionary<string, string?> typeMapping = new();
+        private static Dictionary<string, string> typeMapping = new();
         private static List<TypeDefinition>? newAssemblyTypes;
 
         static bool debugEnabled = false;
@@ -25,6 +49,7 @@ namespace dnMatcher
             string unobfDllPath = string.Empty;
             string dllPath = string.Empty;
             string mappingFilePath = string.Empty;
+            string tmpPath = Guid.NewGuid().ToString() + ".dll";
             string outputPath = string.Empty;
 
             for (int i = 0; i < args.Length; i++)
@@ -94,40 +119,110 @@ namespace dnMatcher
                     Console.WriteLine("[TYPES] Could not find suitable match for " + originalType);
                     continue;
                 }
-                typeMapping.Add(originalType.FullName, obfuscatedType.FullName);
-                //Console.WriteLine($"{originalType} = {obfuscatedType}");
-            }
-            Console.WriteLine($"[TYPES] Matched {typeMapping.Count} types between both assemblies.");
-            string filePath = Path.Combine(Directory.GetCurrentDirectory(), mappingFilePath);
-            using (StreamWriter writer = new StreamWriter(filePath))
-            {
-                foreach (KeyValuePair<string, string?> kvp in typeMapping)
+                if (!typeMapping.ContainsKey(obfuscatedType.FullName))
                 {
-                    writer.WriteLine($"{kvp.Key} -> {kvp.Value}");
+                    typeMapping.Add(obfuscatedType.FullName, originalType.FullName);
                 }
             }
-            Console.WriteLine($"[TYPES] Mapping dictionary written to file: {filePath}");
-            var firstType = oldAssembly.Types.First(t => t.FullName == typeMapping.First().Key);
-            foreach (var method in firstType.Methods)
-            {
-                Console.WriteLine(method);
-            }
+            Console.WriteLine($"[TYPES] Matched {typeMapping.Count} types between both assemblies.");
 
-            Dictionary<string, string> mapping = LoadMapping(mappingFilePath);
-
-            if (mapping.Count == 0)
+            if (typeMapping.Count == 0)
             {
                 Print("Mapping file is empty or invalid.", ConsoleColor.Red);
                 return;
             }
 
+            if (ApplyMapping(dllPath, tmpPath, typeMapping) == 1)
+                return;
+
+            //var firstType = oldAssembly.Types.First(t => t.FullName == typeMapping.First().Key);
+            var deobfAssembly = ModuleDefinition.ReadModule(tmpPath);
+            Console.WriteLine("[INFO] Loading deobfuscated assembly...");
+            var list1 = new List<MethodDetails>();
+            var list2 = new List<MethodDetails>();
+            for (int i = 0; i < typeMapping.Count; i++)
+            {
+                string type = typeMapping.ElementAt(i).Value;
+                foreach (var oldMethod in oldAssembly.GetType(string.Empty, type).Methods)
+                {
+                    var name = oldMethod.Name;
+                    var returnType = oldMethod.ReturnType.FullName;
+                    var parameterTypes = oldMethod.Parameters.Select(p => p.ParameterType.FullName).ToList();
+                    var isPublic = oldMethod.IsPublic;
+                    var isPrivate = oldMethod.IsPrivate;
+                    var hasOverrides = oldMethod.HasOverrides;
+                    var details = new MethodDetails
+                    {
+                        TypeName = type,
+                        MethodName = name,
+                        ReturnType = returnType,
+                        ParameterTypes = parameterTypes,
+                        IsPublic = isPublic,
+                        IsPrivate = isPrivate,
+                        HasOverrides = hasOverrides
+                    };
+                    list1.Add(details);
+                }
+                foreach (var newMethod in deobfAssembly.GetType(string.Empty, type).Methods)
+                {
+                    var name = newMethod.Name;
+                    var returnType = newMethod.ReturnType.FullName;
+                    var parameterTypes = newMethod.Parameters.Select(p => p.ParameterType.FullName).ToList();
+                    var isPublic = newMethod.IsPublic;
+                    var isPrivate = newMethod.IsPrivate;
+                    var hasOverrides = newMethod.HasOverrides;
+                    var details = new MethodDetails
+                    {
+                        TypeName = type,
+                        MethodName = name,
+                        ReturnType = returnType,
+                        ParameterTypes = parameterTypes,
+                        IsPublic = isPublic,
+                        IsPrivate = isPrivate,
+                        HasOverrides = hasOverrides
+                    };
+                    list2.Add(details);
+                }
+            }
+
+            var methodMatches = FindPerfectMatches(list1.Distinct().ToList(), list2.Distinct().ToList());
+            Dictionary<string, string> methodMapping = new();
+            foreach (var match in methodMatches)
+            {
+                if (!methodMapping.ContainsKey(match.Item2.MethodName))
+                {
+                    Console.WriteLine($"{match.Item2.MethodName} -> {match.Item1.MethodName}");
+                    methodMapping.Add(match.Item2.MethodName, match.Item1.MethodName);
+                }
+            }
+            deobfAssembly.Dispose();
+
+            var mapping = typeMapping.Concat(methodMapping).ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+
+            if (ApplyMapping(tmpPath, outputPath, mapping) == 1)
+                return;
+
+            File.Delete(tmpPath);
+
+            string filePath = Path.Combine(Directory.GetCurrentDirectory(), mappingFilePath);
+            using (StreamWriter writer = new StreamWriter(filePath))
+            {
+                foreach (KeyValuePair<string, string> kvp in mapping)
+                {
+                    writer.WriteLine($"{kvp.Key} -> {kvp.Value}");
+                }
+            }
+            Console.WriteLine($"Mapping dictionaries written to file: {filePath}");
+        }
+
+        private static int ApplyMapping(string dllPath, string outputPath, Dictionary<string, string> mapping)
+        {
             try
             {
-                ModuleDefMD module = ModuleDefMD.Load(dllPath);
-
+                using ModuleDefMD module = ModuleDefMD.Load(dllPath);
                 foreach (var type in module.Types)
                 {
-                    string? deobfuscatedTypeName = GetDeobfuscatedString(mapping, type.Name);
+                    string? deobfuscatedTypeName = GetDeobfuscatedValue(mapping, type.Name);
                     if (!string.IsNullOrEmpty(deobfuscatedTypeName))
                     {
                         Debug($"Type: {type.Name} -> {deobfuscatedTypeName}");
@@ -136,7 +231,7 @@ namespace dnMatcher
 
                     foreach (var method in type.Methods)
                     {
-                        string? deobfuscatedMethodName = GetDeobfuscatedString(mapping, method.Name);
+                        string? deobfuscatedMethodName = GetDeobfuscatedValue(mapping, method.Name);
                         if (!string.IsNullOrEmpty(deobfuscatedMethodName))
                         {
                             Debug($"Method: {method.Name} -> {deobfuscatedMethodName}");
@@ -146,7 +241,7 @@ namespace dnMatcher
 
                         foreach (var parameter in method.Parameters)
                         {
-                            string? deobfuscatedParameterName = GetDeobfuscatedString(mapping, parameter.Name);
+                            string? deobfuscatedParameterName = GetDeobfuscatedValue(mapping, parameter.Name);
                             if (!string.IsNullOrEmpty(deobfuscatedParameterName))
                             {
                                 Debug($"Parameter: {parameter.Name} -> {deobfuscatedParameterName}");
@@ -157,7 +252,7 @@ namespace dnMatcher
 
                     foreach (var field in type.Fields)
                     {
-                        string? deobfuscatedFieldName = GetDeobfuscatedString(mapping, field.Name);
+                        string? deobfuscatedFieldName = GetDeobfuscatedValue(mapping, field.Name);
                         if (!string.IsNullOrEmpty(deobfuscatedFieldName))
                         {
                             Debug($"Field: {field.Name} -> {deobfuscatedFieldName}");
@@ -167,7 +262,7 @@ namespace dnMatcher
 
                     foreach (var property in type.Properties)
                     {
-                        string? deobfuscatedPropertyName = GetDeobfuscatedString(mapping, property.Name);
+                        string? deobfuscatedPropertyName = GetDeobfuscatedValue(mapping, property.Name);
                         if (!string.IsNullOrEmpty(deobfuscatedPropertyName))
                         {
                             Debug($"Property: {property.Name} -> {deobfuscatedPropertyName}");
@@ -176,26 +271,27 @@ namespace dnMatcher
                     }
                 }
 
+                ModuleWriterOptions writerOptions = new(module);
                 if (ignoreErrors)
                 {
-                    ModuleWriterOptions writerOptions = new(module);
                     writerOptions.MetadataOptions.Flags |= MetadataFlags.KeepOldMaxStack;
-
-                    module.Write(outputPath, writerOptions);
-                    Print("Deobfuscation completed successfully!\n", ConsoleColor.Green);
                 }
-                else
+                try
                 {
-                    try
+                    using (FileStream stream = File.Create(outputPath))
                     {
-                        module.Write(outputPath);
-                        Print("Deobfuscation completed successfully!\n", ConsoleColor.Green);
+                        module.Write(stream, writerOptions);
+                        module.Dispose();
+                        stream.Close();
                     }
-                    catch (Exception ex)
-                    {
-                        Print("Error occurred during writing the output DLL file: ", ConsoleColor.Red); Print(ex.Message + "\n", ConsoleColor.DarkGray);
-                        Print("\nTry using the ", ConsoleColor.Yellow); Print("--ignore-errors", ConsoleColor.DarkYellow); Print(" argument!\n", ConsoleColor.Yellow);
-                    }
+                    Print("Deobfuscation completed successfully!\n", ConsoleColor.Green);
+                    return 0;
+                }
+                catch (Exception ex)
+                {
+                    Print("Error occurred during writing the output DLL file: ", ConsoleColor.Red); Print(ex.Message + "\n", ConsoleColor.DarkGray);
+                    Print("\nTry using the ", ConsoleColor.Yellow); Print("--ignore-errors", ConsoleColor.DarkYellow); Print(" argument!\n", ConsoleColor.Yellow);
+                    return 1;
                 }
             }
             catch (Exception ex)
@@ -204,13 +300,32 @@ namespace dnMatcher
                 {
                     Print("An error occurred during deobfuscation, but it was ignored: ", ConsoleColor.Yellow); Print(ex.Message + "\n", ConsoleColor.DarkGray);
                     Console.WriteLine("Deobfuscation completed with errors!");
+                    return 1;
                 }
                 else
                 {
                     Print("Error occurred during deobfuscation: ", ConsoleColor.Red); Print(ex.Message + "\n", ConsoleColor.DarkGray);
                     Print("\nTry using the ", ConsoleColor.Yellow); Print("--ignore-errors", ConsoleColor.DarkYellow); Print(" argument!\n", ConsoleColor.Yellow);
+                    return 1;
                 }
             }
+        }
+
+        private static List<(MethodDetails, MethodDetails)> FindPerfectMatches(List<MethodDetails> list1, List<MethodDetails> list2)
+        {
+            var matches = new List<(MethodDetails, MethodDetails)>();
+
+            foreach (var item2 in list2)
+            {
+                var matchingEntries = list1.Where(item1 => item1.Equals(item2)).ToList();
+
+                if (matchingEntries.Count >= 1)
+                {
+                    matches.Add((matchingEntries[0], item2));
+                }
+            }
+
+            return matches;
         }
 
         private static TypeDefinition? FindNewType(TypeDefinition oldType)
@@ -223,7 +338,7 @@ namespace dnMatcher
             foreach (var newType in newAssemblyTypes)
             {
                 if (oldType.FullName == newType.FullName) return newType;
-                if (typeMapping.ContainsValue(newType.FullName)) continue;
+                if (typeMapping.ContainsKey(newType.FullName)) continue;
                 var similarity = CalculateSimilarity(oldType, newType);
                 if (!(similarity > bestSimilarity) || similarity < lowestAllowedSimilarity) continue;
                 bestSimilarity = similarity;
@@ -268,7 +383,7 @@ namespace dnMatcher
             return similarity;
         }
 
-        private static double CompareInheritance(TypeDefinition oldType, TypeDefinition newType)
+        private static double CompareInheritance(TypeDefinition newType, TypeDefinition oldType)
         {
             if (oldType.BaseType == null && newType.BaseType == null) return 1.0;
 
@@ -280,8 +395,8 @@ namespace dnMatcher
 
             try
             {
-                if (!typeMapping.TryGetValue(oldType.BaseType.FullName, out var mappedBaseType) ||
-                    mappedBaseType == null) return baseTypesMatch ? 1.0 : 0.0;
+                if (!typeMapping.TryGetValue(oldType.BaseType.FullName, out var mappedBaseType) || mappedBaseType == null)
+                    return baseTypesMatch ? 1.0 : 0.0;
                 var newBaseType = newType.BaseType.FullName;
 
                 if (newBaseType != null && mappedBaseType == newBaseType) baseTypesMatch = true;
@@ -414,41 +529,11 @@ namespace dnMatcher
                 cilBody.KeepOldMaxStack = true;
             }
         }
-
-        static Dictionary<string, string> LoadMapping(string mappingFilePath)
+        static string? GetDeobfuscatedValue(Dictionary<string, string> mapping, string obfuscatedString)
         {
-            Dictionary<string, string> mapping = new();
-
-            if (!File.Exists(mappingFilePath))
+            if (mapping.ContainsKey(obfuscatedString))
             {
-                Console.WriteLine("Mapping file not found: " + mappingFilePath);
-                return mapping;
-            }
-
-            string[] lines = File.ReadAllLines(mappingFilePath);
-
-            foreach (string? line in lines)
-            {
-                string[] parts = line.Split(" -> ");
-
-                if (parts.Length == 2)
-                {
-                    string obfuscatedName = parts[0].Trim();
-                    string deobfuscatedName = parts[1].Trim();
-
-                    mapping[obfuscatedName] = deobfuscatedName;
-                }
-            }
-
-            return mapping;
-        }
-
-        static string? GetDeobfuscatedString(Dictionary<string, string> mapping, string obfuscatedString)
-        {
-            foreach (var kvp in mapping)
-            {
-                if (kvp.Value == obfuscatedString)
-                    return kvp.Key;
+                return mapping[obfuscatedString];
             }
 
             return null;
