@@ -3,7 +3,6 @@ using dnlib.DotNet.Writer;
 using Mono.Cecil;
 using TypeDefinition = Mono.Cecil.TypeDefinition;
 using ICustomAttributeProvider = Mono.Cecil.ICustomAttributeProvider;
-using Mono.Cecil.Rocks;
 using Mono.Collections.Generic;
 
 namespace dnMatcher
@@ -58,6 +57,38 @@ namespace dnMatcher
         }
     }
 
+    public class FieldDetails
+    {
+        public string Name { get; set; }
+        public string FieldType { get; set; }
+        public int Offset { get; set; }
+        public bool IsPrivate { get; set; }
+        public bool IsPublic { get; set; }
+        public bool IsStatic { get; set; }
+        public bool HasConstant { get; set; }
+        public bool HasDefault { get; set; }
+        public bool IsLiteral { get; set; }
+
+        public override bool Equals(object obj)
+        {
+            if (obj == null || GetType() != obj.GetType())
+            {
+                return false;
+            }
+
+            FieldDetails other = (FieldDetails)obj;
+
+            return FieldType == other.FieldType &&
+                   Offset == other.Offset &&
+                   IsPrivate == other.IsPrivate &&
+                   IsPublic == other.IsPublic &&
+                   IsStatic == other.IsStatic &&
+                   HasConstant == other.HasConstant &&
+                   HasDefault == other.HasDefault &&
+                   IsLiteral == other.IsLiteral;
+        }
+    }
+    
     class Program
     {
         private static Dictionary<string, string> typeMapping = new();
@@ -166,8 +197,8 @@ namespace dnMatcher
             //var firstType = oldAssembly.Types.First(t => t.FullName == typeMapping.First().Key);
             var deobfAssembly = ModuleDefinition.ReadModule(tmpPath1);
             Console.WriteLine("[INFO] Loading deobfuscated assembly...");
-            var list1 = new List<MethodDetails>();
-            var list2 = new List<MethodDetails>();
+            var methodList1 = new List<MethodDetails>();
+            var methodList2 = new List<MethodDetails>();
             for (int i = 0; i < typeMapping.Count; i++)
             {
                 string type = typeMapping.ElementAt(i).Value;
@@ -180,7 +211,7 @@ namespace dnMatcher
                     var isPrivate = oldMethod.IsPrivate;
                     var hasOverrides = oldMethod.HasOverrides;
                     var parameters = oldMethod.Parameters;
-                    var details = new MethodDetails
+                    var methodDetails = new MethodDetails
                     {
                         TypeName = type,
                         MethodName = name,
@@ -191,7 +222,7 @@ namespace dnMatcher
                         HasOverrides = hasOverrides,
                         Parameters = parameters
                     };
-                    list1.Add(details);
+                    methodList1.Add(methodDetails);
                 }
                 foreach (var newMethod in deobfAssembly.GetType(string.Empty, type).Methods)
                 {
@@ -202,7 +233,7 @@ namespace dnMatcher
                     var isPrivate = newMethod.IsPrivate;
                     var hasOverrides = newMethod.HasOverrides;
                     var parameters = newMethod.Parameters;
-                    var details = new MethodDetails
+                    var methodDetails = new MethodDetails
                     {
                         TypeName = type,
                         MethodName = name,
@@ -213,11 +244,11 @@ namespace dnMatcher
                         HasOverrides = hasOverrides,
                         Parameters = parameters
                     };
-                    list2.Add(details);
+                    methodList2.Add(methodDetails);
                 }
             }
 
-            var methodMatches = FindMethodMatches(list1.Distinct().ToList(), list2.Distinct().ToList());
+            var methodMatches = FindMethodMatches(methodList1.Distinct().ToList(), methodList2.Distinct().ToList());
             Dictionary<string, string> methodMapping = new();
             foreach (var match in methodMatches)
             {
@@ -226,9 +257,81 @@ namespace dnMatcher
                     methodMapping.Add(match.Item1.MethodName, match.Item2.MethodName);
                 }
             }
+
+            var fieldList1 = new List<FieldDetails>();
+            var fieldList2 = new List<FieldDetails>();
+            for (int i = 0; i < typeMapping.Count; i++)
+            {
+                string type = typeMapping.ElementAt(i).Value;
+                foreach (var oldField in oldAssembly.GetType(string.Empty, type).Fields)
+                {
+                    var name = oldField.Name;
+                    var fieldType = oldField.FieldType.FullName;
+                    var offset = oldField.Offset;
+                    var isPrivate = oldField.IsPrivate;
+                    var isPublic = oldField.IsPublic;
+                    var isStatic = oldField.IsStatic;
+                    var hasConstant = oldField.HasConstant;
+                    var hasDefault = oldField.HasDefault;
+                    var isLiteral = oldField.IsLiteral;
+                    var fieldDetails = new FieldDetails
+                    {
+                        Name = name,
+                        FieldType = fieldType,
+                        Offset = offset,
+                        IsPrivate = isPrivate,
+                        IsPublic = isPublic,
+                        IsStatic = isStatic,
+                        HasConstant = hasConstant,
+                        HasDefault = hasDefault,
+                        IsLiteral = isLiteral
+                    };
+                    fieldList1.Add(fieldDetails);
+                }
+                foreach (var newField in deobfAssembly.GetType(string.Empty, type).Fields)
+                {
+                    var name = newField.Name;
+                    var fieldType = newField.FieldType.FullName;
+                    var offset = newField.Offset;
+                    var isPrivate = newField.IsPrivate;
+                    var isPublic = newField.IsPublic;
+                    var isStatic = newField.IsStatic;
+                    var hasConstant = newField.HasConstant;
+                    var hasDefault = newField.HasDefault;
+                    var isLiteral = newField.IsLiteral;
+                    var fieldDetails = new FieldDetails
+                    {
+                        Name = name,
+                        FieldType = fieldType,
+                        Offset = offset,
+                        IsPrivate = isPrivate,
+                        IsPublic = isPublic,
+                        IsStatic = isStatic,
+                        HasConstant = hasConstant,
+                        HasDefault = hasDefault,
+                        IsLiteral = isLiteral
+                    };
+                    fieldList2.Add(fieldDetails);
+                }
+            }
+
+            var fieldMatches = FindFieldMatches(fieldList1.Distinct().ToList(), fieldList2.Distinct().ToList());
+            Dictionary<string, string> fieldMapping = new();
+            foreach (var match in fieldMatches)
+            {
+                if (!fieldMapping.ContainsKey(match.Item1.Name))
+                {
+                    //Console.WriteLine($"{match.Item1.Name} -> {match.Item2.Name}");
+                    fieldMapping.Add(match.Item1.Name, match.Item2.Name);
+                }
+            }
+
             deobfAssembly.Dispose();
 
-            var mapping = typeMapping.Union(methodMapping).GroupBy(kv => kv.Key).ToDictionary(g => g.Key, g => g.First().Value);
+            var mapping = new[] { typeMapping, methodMapping, fieldMapping }
+            .SelectMany(dict => dict)
+            .GroupBy(pair => pair.Key)
+            .ToDictionary(group => group.Key, group => group.First().Value);
 
             string tmpPath2 = Guid.NewGuid().ToString() + ".dll";
 
@@ -237,8 +340,8 @@ namespace dnMatcher
 
             File.Delete(tmpPath1);
 
-            var listA = new List<ParameterDetails>();
-            var listB = new List<ParameterDetails>();
+            var parameterList1 = new List<ParameterDetails>();
+            var parameterList2 = new List<ParameterDetails>();
             for (int i = 0; i < methodMatches.Count; i++)
             {
                 foreach (var parameter in methodMatches.ElementAt(i).Item1.Parameters)
@@ -250,7 +353,7 @@ namespace dnMatcher
                     var isOptional = parameter.IsOptional;
                     var hasConstant = parameter.HasConstant;
                     var hasDefault = parameter.HasDefault;
-                    var details = new ParameterDetails
+                    var parameterDetails = new ParameterDetails
                     {
                         Name = name,
                         ParameterType = parameterType.Name,
@@ -259,7 +362,7 @@ namespace dnMatcher
                         HasConstant = hasConstant,
                         HasDefault = hasDefault
                     };
-                    listA.Add(details);
+                    parameterList1.Add(parameterDetails);
                 }
                 foreach (var parameter in methodMatches.ElementAt(i).Item2.Parameters)
                 {
@@ -270,7 +373,7 @@ namespace dnMatcher
                     var isOptional = parameter.IsOptional;
                     var hasConstant = parameter.HasConstant;
                     var hasDefault = parameter.HasDefault;
-                    var details = new ParameterDetails
+                    var parameterDetails = new ParameterDetails
                     {
                         Name = name,
                         ParameterType = parameterType.Name,
@@ -279,21 +382,21 @@ namespace dnMatcher
                         HasConstant = hasConstant,
                         HasDefault = hasDefault
                     };
-                    listB.Add(details);
+                    parameterList2.Add(parameterDetails);
                 }
             }
 
             Dictionary<string, string> parameterMapping = new();
-            if (listB.Count == listA.Count)
+            if (parameterList2.Count == parameterList1.Count)
             {
-                for (int i = 0; i < listB.Count; i++)
+                for (int i = 0; i < parameterList2.Count; i++)
                 {
-                    if (listB[i].Equals(listA[i]))
+                    if (parameterList2[i].Equals(parameterList1[i]))
                     {
-                        if (!parameterMapping.ContainsKey(listA[i].Name))
+                        if (!parameterMapping.ContainsKey(parameterList1[i].Name))
                         {
-                            Console.WriteLine($"{listA[i].Name} -> {listB[i].Name}");
-                            parameterMapping.Add(listA[i].Name, listB[i].Name);
+                            //Console.WriteLine($"{parameterList1[i].Name} -> {parameterList2[i].Name}");
+                            parameterMapping.Add(parameterList1[i].Name, parameterList2[i].Name);
                         }
                     }
                 }
@@ -349,7 +452,6 @@ namespace dnMatcher
 
                         foreach (var parameter in method.Parameters)
                         {
-                            //Console.WriteLine(parameter.Name);
                             string? deobfuscatedParameterName = GetDeobfuscatedValue(mapping, parameter.Name);
                             if (!string.IsNullOrEmpty(deobfuscatedParameterName))
                             {
@@ -418,6 +520,23 @@ namespace dnMatcher
                     return 1;
                 }
             }
+        }
+
+        private static List<(FieldDetails, FieldDetails)> FindFieldMatches(List<FieldDetails> list1, List<FieldDetails> list2)
+        {
+            var matches = new List<(FieldDetails, FieldDetails)>();
+
+            foreach (var item2 in list2)
+            {
+                var matchingEntries = list1.Where(item1 => item1.Equals(item2)).ToList();
+
+                if (matchingEntries.Count == 1)
+                {
+                    matches.Add((item2, matchingEntries[0]));
+                }
+            }
+
+            return matches;
         }
 
         private static List<(MethodDetails, MethodDetails)> FindMethodMatches(List<MethodDetails> list1, List<MethodDetails> list2)
