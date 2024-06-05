@@ -35,7 +35,7 @@ namespace dnMatcher
 
     public class ParameterDetails
     {
-        public string Name { get; set; }
+        public string ParameterName { get; set; }
         public string ParameterType { get; set; }
         public bool IsOut { get; set; }
         public bool IsOptional { get; set; }
@@ -59,7 +59,8 @@ namespace dnMatcher
 
     public class FieldDetails
     {
-        public string Name { get; set; }
+        public string TypeName { get; set; }
+        public string FieldName { get; set; }
         public string FieldType { get; set; }
         public int Offset { get; set; }
         public bool IsPrivate { get; set; }
@@ -78,7 +79,8 @@ namespace dnMatcher
 
             FieldDetails other = (FieldDetails)obj;
 
-            return FieldType == other.FieldType &&
+            return TypeName == other.TypeName &&
+                   FieldType == other.FieldType &&
                    Offset == other.Offset &&
                    IsPrivate == other.IsPrivate &&
                    IsPublic == other.IsPublic &&
@@ -267,7 +269,6 @@ namespace dnMatcher
                 {
                     var name = oldField.Name;
                     var fieldType = oldField.FieldType.FullName;
-                    var offset = oldField.Offset;
                     var isPrivate = oldField.IsPrivate;
                     var isPublic = oldField.IsPublic;
                     var isStatic = oldField.IsStatic;
@@ -276,9 +277,9 @@ namespace dnMatcher
                     var isLiteral = oldField.IsLiteral;
                     var fieldDetails = new FieldDetails
                     {
-                        Name = name,
+                        TypeName = type,
+                        FieldName = name,
                         FieldType = fieldType,
-                        Offset = offset,
                         IsPrivate = isPrivate,
                         IsPublic = isPublic,
                         IsStatic = isStatic,
@@ -292,7 +293,6 @@ namespace dnMatcher
                 {
                     var name = newField.Name;
                     var fieldType = newField.FieldType.FullName;
-                    var offset = newField.Offset;
                     var isPrivate = newField.IsPrivate;
                     var isPublic = newField.IsPublic;
                     var isStatic = newField.IsStatic;
@@ -301,9 +301,9 @@ namespace dnMatcher
                     var isLiteral = newField.IsLiteral;
                     var fieldDetails = new FieldDetails
                     {
-                        Name = name,
+                        TypeName = type,
+                        FieldName = name,
                         FieldType = fieldType,
-                        Offset = offset,
                         IsPrivate = isPrivate,
                         IsPublic = isPublic,
                         IsStatic = isStatic,
@@ -319,10 +319,10 @@ namespace dnMatcher
             Dictionary<string, string> fieldMapping = new();
             foreach (var match in fieldMatches)
             {
-                if (!fieldMapping.ContainsKey(match.Item1.Name))
+                if (!fieldMapping.ContainsKey(match.Item1.FieldName))
                 {
                     //Console.WriteLine($"{match.Item1.Name} -> {match.Item2.Name}");
-                    fieldMapping.Add(match.Item1.Name, match.Item2.Name);
+                    fieldMapping.Add(match.Item1.FieldName, match.Item2.FieldName);
                 }
             }
 
@@ -355,7 +355,7 @@ namespace dnMatcher
                     var hasDefault = parameter.HasDefault;
                     var parameterDetails = new ParameterDetails
                     {
-                        Name = name,
+                        ParameterName = name,
                         ParameterType = parameterType.Name,
                         IsOut = isOut,
                         IsOptional = isOptional,
@@ -375,7 +375,7 @@ namespace dnMatcher
                     var hasDefault = parameter.HasDefault;
                     var parameterDetails = new ParameterDetails
                     {
-                        Name = name,
+                        ParameterName = name,
                         ParameterType = parameterType.Name,
                         IsOut = isOut,
                         IsOptional = isOptional,
@@ -393,10 +393,10 @@ namespace dnMatcher
                 {
                     if (parameterList2[i].Equals(parameterList1[i]))
                     {
-                        if (!parameterMapping.ContainsKey(parameterList1[i].Name))
+                        if (!parameterMapping.ContainsKey(parameterList1[i].ParameterName))
                         {
                             //Console.WriteLine($"{parameterList1[i].Name} -> {parameterList2[i].Name}");
-                            parameterMapping.Add(parameterList1[i].Name, parameterList2[i].Name);
+                            parameterMapping.Add(parameterList1[i].ParameterName, parameterList2[i].ParameterName);
                         }
                     }
                 }
@@ -526,12 +526,15 @@ namespace dnMatcher
         {
             var matches = new List<(FieldDetails, FieldDetails)>();
 
-            foreach (var item2 in list2)
+            var buffer1 = list1.ToList();
+            foreach (var item2 in list2.ToList())
             {
-                var matchingEntries = list1.Where(item1 => item1.Equals(item2)).ToList();
+                var matchingEntries = buffer1.Where(item1 => item1.Equals(item2)).ToList();
 
-                if (matchingEntries.Count == 1)
+                if (matchingEntries.Count >= 1)
                 {
+                    buffer1.Remove(matchingEntries[0]);
+                    list2.Remove(item2);
                     matches.Add((item2, matchingEntries[0]));
                 }
             }
@@ -729,7 +732,6 @@ namespace dnMatcher
             return attributeCountSimilarity;
         }
 
-
         private static double CompareEnumFieldNames(TypeDefinition oldType, TypeDefinition newType)
         {
             if (oldType.BaseType?.FullName != "System.Enum" || newType.BaseType?.FullName != "System.Enum") return 0.0;
@@ -757,6 +759,7 @@ namespace dnMatcher
                 cilBody.KeepOldMaxStack = true;
             }
         }
+
         static string? GetDeobfuscatedValue(Dictionary<string, string> mapping, string obfuscatedString)
         {
             if (mapping.ContainsKey(obfuscatedString))
@@ -769,7 +772,7 @@ namespace dnMatcher
 
         static void PrintHelp()
         {
-            Console.WriteLine("Usage: matcher.exe [OPTIONS]\n");
+            Console.WriteLine("Usage: dnMatcher.exe [OPTIONS]\n");
             Console.WriteLine("Options:");
             Print("  -u, --unobf-dll", ConsoleColor.Yellow); Print("    Path to the unobfuscated DLL file"); Print(" (required)\n", ConsoleColor.Yellow);
             Print("  -d, --dll", ConsoleColor.Yellow); Print("          Path to the obfuscated DLL file"); Print(" (required)\n", ConsoleColor.Yellow);
