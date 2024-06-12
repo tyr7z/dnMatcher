@@ -5,6 +5,12 @@ using TypeDefinition = Mono.Cecil.TypeDefinition;
 using ICustomAttributeProvider = Mono.Cecil.ICustomAttributeProvider;
 using Mono.Collections.Generic;
 
+/* TODO:
+ * - Tidy up mapping appliances.
+ * - Add support of obfuscation patterns to improve precision.
+ * - Add more weighting to improve accuracy.
+ */
+
 namespace dnMatcher
 {
     public class MethodDetails
@@ -98,6 +104,7 @@ namespace dnMatcher
 
         static bool debugEnabled = false;
         static bool ignoreErrors = false;
+        static bool minifiedMapping = false;
 
         static void Main(string[] args)
         {
@@ -142,6 +149,10 @@ namespace dnMatcher
                 else if (args[i] == "--ignore-errors")
                 {
                     ignoreErrors = true;
+                }
+                else if (args[i] == "--minified-mapping")
+                {
+                    minifiedMapping = true;
                 }
             }
 
@@ -412,18 +423,22 @@ namespace dnMatcher
             {
                 foreach (KeyValuePair<string, string> kvp in typeMapping)
                 {
+                    if (minifiedMapping && kvp.Key == kvp.Value) continue;
                     writer.WriteLine($"{kvp.Key} -> {kvp.Value}");
                 }
                 foreach (KeyValuePair<string, string> kvp in methodMapping)
                 {
+                    if (minifiedMapping && kvp.Key == kvp.Value) continue;
                     writer.WriteLine($"{kvp.Key} -> {kvp.Value}");
                 }
                 foreach (KeyValuePair<string, string> kvp in fieldMapping)
                 {
+                    if (minifiedMapping && kvp.Key == kvp.Value) continue;
                     writer.WriteLine($"{kvp.Key} -> {kvp.Value}");
                 }
                 foreach (KeyValuePair<string, string> kvp in parameterMapping)
                 {
+                    if (minifiedMapping && kvp.Key == kvp.Value) continue;
                     writer.WriteLine($"{kvp.Key} -> {kvp.Value}");
                 }
             }
@@ -784,6 +799,7 @@ namespace dnMatcher
             Print("  -o, --output", ConsoleColor.Yellow); Print("       Path to the output file"); Print(" (required)\n", ConsoleColor.Yellow);
             Console.WriteLine("  --debug            Enable debug logging");
             Console.WriteLine("  --ignore-errors    Ignore errors during deobfuscation (recommended for Cpp2Il DLLs)");
+            Console.WriteLine("  --minified-mapping Skip repeated names on both sides of the mapping");
             Console.WriteLine("  --help             Display this help message");
         }
 
