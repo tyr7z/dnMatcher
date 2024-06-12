@@ -418,6 +418,10 @@ namespace dnMatcher
                 {
                     writer.WriteLine($"{kvp.Key} -> {kvp.Value}");
                 }
+                foreach (KeyValuePair<string, string> kvp in fieldMapping)
+                {
+                    writer.WriteLine($"{kvp.Key} -> {kvp.Value}");
+                }
                 foreach (KeyValuePair<string, string> kvp in parameterMapping)
                 {
                     writer.WriteLine($"{kvp.Key} -> {kvp.Value}");
