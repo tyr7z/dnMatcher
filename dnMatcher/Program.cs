@@ -443,6 +443,42 @@ namespace dnMatcher
                 }
             }
             Console.WriteLine($"Mapping dictionaries written to file: {filePath}");
+
+            // rpcMatcher
+            //GetInherits(outputPath, "OutRpc", "out_rpcs.txt");
+            //GetInherits(outputPath, "InRpc", "in_rpcs.txt");
+        }
+
+        private static void GetInherits(string dllPath, string baseTypeName, string outputFile)
+        {
+            ModuleDefMD module = ModuleDefMD.Load(dllPath);
+            var classesUsingType = new List<string>();
+            using (StreamWriter writer = new StreamWriter(outputFile))
+            {
+                var derivedClasses = new List<string>();
+                foreach (TypeDef type in module.Types)
+                {
+                    if (type.IsInterface || type.IsValueType)
+                        continue;
+
+                    if (type.BaseType != null && type.BaseType.FullName == baseTypeName)
+                    {
+                        string key = typeMapping.FirstOrDefault(pair => pair.Value == type.FullName).Key;
+                        Console.WriteLine($"{key} -> {type.FullName}");
+                        writer.WriteLine($"{key} -> {type.FullName}");
+                        derivedClasses.Add(type.FullName);
+                    }
+
+                    foreach (var iface in type.Interfaces)
+                    {
+                        if (iface.Interface != null && iface.Interface.FullName == baseTypeName)
+                        {
+                            derivedClasses.Add(type.FullName);
+                            break;
+                        }
+                    }
+                }
+            }
         }
 
         private static int ApplyMapping(string dllPath, string outputPath, Dictionary<string, string> mapping)
