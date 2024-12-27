@@ -75,6 +75,7 @@ namespace dnMatcher
         public bool HasConstant { get; set; }
         public bool HasDefault { get; set; }
         public bool IsLiteral { get; set; }
+        public bool IsReadOnly { get; set; }
 
         public override bool Equals(object obj)
         {
@@ -93,7 +94,8 @@ namespace dnMatcher
                    IsStatic == other.IsStatic &&
                    HasConstant == other.HasConstant &&
                    HasDefault == other.HasDefault &&
-                   IsLiteral == other.IsLiteral;
+                   IsLiteral == other.IsLiteral &&
+                   IsReadOnly == other.IsReadOnly;
         }
     }
     
@@ -217,45 +219,31 @@ namespace dnMatcher
                 string type = typeMapping.ElementAt(i).Value;
                 foreach (var oldMethod in oldAssembly.GetType(string.Empty, type).Methods)
                 {
-                    var name = oldMethod.Name;
-                    var returnType = oldMethod.ReturnType.FullName;
-                    var parameterTypes = oldMethod.Parameters.Select(p => p.ParameterType.FullName).ToList();
-                    var isPublic = oldMethod.IsPublic;
-                    var isPrivate = oldMethod.IsPrivate;
-                    var hasOverrides = oldMethod.HasOverrides;
-                    var parameters = oldMethod.Parameters;
                     var methodDetails = new MethodDetails
                     {
                         TypeName = type,
-                        MethodName = name,
-                        ReturnType = returnType,
-                        ParameterTypes = parameterTypes,
-                        IsPublic = isPublic,
-                        IsPrivate = isPrivate,
-                        HasOverrides = hasOverrides,
-                        Parameters = parameters
+                        MethodName = oldMethod.Name,
+                        ReturnType = oldMethod.ReturnType.FullName,
+                        ParameterTypes = oldMethod.Parameters.Select(p => p.ParameterType.FullName).ToList(),
+                        IsPublic = oldMethod.IsPublic,
+                        IsPrivate = oldMethod.IsPrivate,
+                        HasOverrides = oldMethod.HasOverrides,
+                        Parameters = oldMethod.Parameters
                     };
                     methodList1.Add(methodDetails);
                 }
                 foreach (var newMethod in deobfAssembly.GetType(string.Empty, type).Methods)
                 {
-                    var name = newMethod.Name;
-                    var returnType = newMethod.ReturnType.FullName;
-                    var parameterTypes = newMethod.Parameters.Select(p => p.ParameterType.FullName).ToList();
-                    var isPublic = newMethod.IsPublic;
-                    var isPrivate = newMethod.IsPrivate;
-                    var hasOverrides = newMethod.HasOverrides;
-                    var parameters = newMethod.Parameters;
                     var methodDetails = new MethodDetails
                     {
                         TypeName = type,
-                        MethodName = name,
-                        ReturnType = returnType,
-                        ParameterTypes = parameterTypes,
-                        IsPublic = isPublic,
-                        IsPrivate = isPrivate,
-                        HasOverrides = hasOverrides,
-                        Parameters = parameters
+                        MethodName = newMethod.Name,
+                        ReturnType = newMethod.ReturnType.FullName,
+                        ParameterTypes = newMethod.Parameters.Select(p => p.ParameterType.FullName).ToList(),
+                        IsPublic = newMethod.IsPublic,
+                        IsPrivate = newMethod.IsPrivate,
+                        HasOverrides = newMethod.HasOverrides,
+                        Parameters = newMethod.Parameters
                     };
                     methodList2.Add(methodDetails);
                 }
@@ -278,49 +266,35 @@ namespace dnMatcher
                 string type = typeMapping.ElementAt(i).Value;
                 foreach (var oldField in oldAssembly.GetType(string.Empty, type).Fields)
                 {
-                    var name = oldField.Name;
-                    var fieldType = oldField.FieldType.FullName;
-                    var isPrivate = oldField.IsPrivate;
-                    var isPublic = oldField.IsPublic;
-                    var isStatic = oldField.IsStatic;
-                    var hasConstant = oldField.HasConstant;
-                    var hasDefault = oldField.HasDefault;
-                    var isLiteral = oldField.IsLiteral;
                     var fieldDetails = new FieldDetails
                     {
                         TypeName = type,
-                        FieldName = name,
-                        FieldType = fieldType,
-                        IsPrivate = isPrivate,
-                        IsPublic = isPublic,
-                        IsStatic = isStatic,
-                        HasConstant = hasConstant,
-                        HasDefault = hasDefault,
-                        IsLiteral = isLiteral
+                        FieldName = oldField.Name,
+                        FieldType = oldField.FieldType.FullName,
+                        IsPrivate = oldField.IsPrivate,
+                        IsPublic = oldField.IsPublic,
+                        IsStatic = oldField.IsStatic,
+                        HasConstant = oldField.HasConstant,
+                        HasDefault = oldField.HasDefault,
+                        IsLiteral = oldField.IsLiteral,
+                        IsReadOnly = oldField.IsInitOnly
                     };
                     fieldList1.Add(fieldDetails);
                 }
                 foreach (var newField in deobfAssembly.GetType(string.Empty, type).Fields)
                 {
-                    var name = newField.Name;
-                    var fieldType = newField.FieldType.FullName;
-                    var isPrivate = newField.IsPrivate;
-                    var isPublic = newField.IsPublic;
-                    var isStatic = newField.IsStatic;
-                    var hasConstant = newField.HasConstant;
-                    var hasDefault = newField.HasDefault;
-                    var isLiteral = newField.IsLiteral;
                     var fieldDetails = new FieldDetails
                     {
                         TypeName = type,
-                        FieldName = name,
-                        FieldType = fieldType,
-                        IsPrivate = isPrivate,
-                        IsPublic = isPublic,
-                        IsStatic = isStatic,
-                        HasConstant = hasConstant,
-                        HasDefault = hasDefault,
-                        IsLiteral = isLiteral
+                        FieldName = newField.Name,
+                        FieldType = newField.FieldType.FullName,
+                        IsPrivate = newField.IsPrivate,
+                        IsPublic = newField.IsPublic,
+                        IsStatic = newField.IsStatic,
+                        HasConstant = newField.HasConstant,
+                        HasDefault = newField.HasDefault,
+                        IsLiteral = newField.IsLiteral,
+                        IsReadOnly = newField.IsInitOnly
                     };
                     fieldList2.Add(fieldDetails);
                 }
@@ -357,41 +331,27 @@ namespace dnMatcher
             {
                 foreach (var parameter in methodMatches.ElementAt(i).Item1.Parameters)
                 {
-                    var name = parameter.Name;
-                    var parameterType = parameter.ParameterType;
-                    var attributes = parameter.Attributes;
-                    var isOut = parameter.IsOut;
-                    var isOptional = parameter.IsOptional;
-                    var hasConstant = parameter.HasConstant;
-                    var hasDefault = parameter.HasDefault;
                     var parameterDetails = new ParameterDetails
                     {
-                        ParameterName = name,
-                        ParameterType = parameterType.Name,
-                        IsOut = isOut,
-                        IsOptional = isOptional,
-                        HasConstant = hasConstant,
-                        HasDefault = hasDefault
+                        ParameterName = parameter.Name,
+                        ParameterType = parameter.ParameterType.Name,
+                        IsOut = parameter.IsOut,
+                        IsOptional = parameter.IsOptional,
+                        HasConstant = parameter.HasConstant,
+                        HasDefault = parameter.HasDefault
                     };
                     parameterList1.Add(parameterDetails);
                 }
                 foreach (var parameter in methodMatches.ElementAt(i).Item2.Parameters)
                 {
-                    var name = parameter.Name;
-                    var parameterType = parameter.ParameterType;
-                    var attributes = parameter.Attributes;
-                    var isOut = parameter.IsOut;
-                    var isOptional = parameter.IsOptional;
-                    var hasConstant = parameter.HasConstant;
-                    var hasDefault = parameter.HasDefault;
                     var parameterDetails = new ParameterDetails
                     {
-                        ParameterName = name,
-                        ParameterType = parameterType.Name,
-                        IsOut = isOut,
-                        IsOptional = isOptional,
-                        HasConstant = hasConstant,
-                        HasDefault = hasDefault
+                        ParameterName = parameter.Name,
+                        ParameterType = parameter.ParameterType.Name,
+                        IsOut = parameter.IsOut,
+                        IsOptional = parameter.IsOptional,
+                        HasConstant = parameter.HasConstant,
+                        HasDefault = parameter.HasDefault
                     };
                     parameterList2.Add(parameterDetails);
                 }
