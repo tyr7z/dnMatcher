@@ -104,6 +104,7 @@ namespace dnMatcher
         private static Dictionary<string, string> typeMapping = new();
         private static List<TypeDefinition>? newAssemblyTypes;
 
+        static bool customEnabled = false;
         static bool debugEnabled = false;
         static bool ignoreErrors = false;
         static bool minifiedMapping = false;
@@ -144,6 +145,10 @@ namespace dnMatcher
                     if (i + 1 < args.Length)
                         outputPath = args[i + 1];
                 }
+                else if (args[i] == "--custom")
+                {
+                    customEnabled = true;
+                }
                 else if (args[i] == "--debug")
                 {
                     debugEnabled = true;
@@ -181,232 +186,262 @@ namespace dnMatcher
             Console.WriteLine("[INFO] Loading old assembly...");
             var newAssembly = ModuleDefinition.ReadModule(dllPath);
             Console.WriteLine("[INFO] Loading new assembly...");
-            Console.WriteLine($"[TYPES] Old assembly has {oldAssembly.Types.Count(t => t.Namespace == string.Empty)} types in root namespace");
-            Console.WriteLine($"[TYPES] New assembly has {newAssembly.Types.Count(t => t.Namespace == string.Empty)} types in root namespace");
-            Console.WriteLine($"[TYPES] Performing type matching...");
-            newAssemblyTypes = newAssembly.Types.Where(t => t.Namespace == string.Empty).ToList();
-            foreach (var originalType in oldAssembly.Types.Where(t => t.Namespace == string.Empty).OrderBy(t => t.BaseType?.FullName != "System.Object"))
-            {
-                var obfuscatedType = FindNewType(originalType);
-                if (obfuscatedType == null)
-                {
-                    Console.WriteLine("[TYPES] Could not find suitable match for " + originalType);
-                    continue;
-                }
-                if (!typeMapping.ContainsKey(obfuscatedType.FullName))
-                {
-                    typeMapping.Add(obfuscatedType.FullName, originalType.FullName);
-                }
-            }
-            Console.WriteLine($"[TYPES] Matched {typeMapping.Count} types between both assemblies.");
 
-            if (typeMapping.Count == 0)
-            {
-                Print("Mapping file is empty or invalid.", ConsoleColor.Red);
-                return;
-            }
+            string mappingPath = Path.Combine(Directory.GetCurrentDirectory(), mappingFilePath);
 
-            if (ApplyMapping(dllPath, tmpPath1, typeMapping) == 1)
-                return;
-
-            //var firstType = oldAssembly.Types.First(t => t.FullName == typeMapping.First().Key);
-            var deobfAssembly = ModuleDefinition.ReadModule(tmpPath1);
-            Console.WriteLine("[INFO] Loading deobfuscated assembly...");
-            var methodList1 = new List<MethodDetails>();
-            var methodList2 = new List<MethodDetails>();
-            for (int i = 0; i < typeMapping.Count; i++)
+            if (!customEnabled)
             {
-                string type = typeMapping.ElementAt(i).Value;
-                foreach (var oldMethod in oldAssembly.GetType(string.Empty, type).Methods)
+                Console.WriteLine($"[TYPES] Old assembly has {oldAssembly.Types.Count(t => t.Namespace == string.Empty)} types in root namespace");
+                Console.WriteLine($"[TYPES] New assembly has {newAssembly.Types.Count(t => t.Namespace == string.Empty)} types in root namespace");
+                Console.WriteLine($"[TYPES] Performing type matching...");
+                newAssemblyTypes = newAssembly.Types.Where(t => t.Namespace == string.Empty).ToList();
+                foreach (var originalType in oldAssembly.Types.Where(t => t.Namespace == string.Empty).OrderBy(t => t.BaseType?.FullName != "System.Object"))
                 {
-                    var methodDetails = new MethodDetails
+                    var obfuscatedType = FindNewType(originalType);
+                    if (obfuscatedType == null)
                     {
-                        TypeName = type,
-                        MethodName = oldMethod.Name,
-                        ReturnType = oldMethod.ReturnType.FullName,
-                        ParameterTypes = oldMethod.Parameters.Select(p => p.ParameterType.FullName).ToList(),
-                        IsPublic = oldMethod.IsPublic,
-                        IsPrivate = oldMethod.IsPrivate,
-                        HasOverrides = oldMethod.HasOverrides,
-                        Parameters = oldMethod.Parameters
-                    };
-                    methodList1.Add(methodDetails);
-                }
-                foreach (var newMethod in deobfAssembly.GetType(string.Empty, type).Methods)
-                {
-                    var methodDetails = new MethodDetails
+                        Console.WriteLine("[TYPES] Could not find suitable match for " + originalType);
+                        continue;
+                    }
+                    if (!typeMapping.ContainsKey(obfuscatedType.FullName))
                     {
-                        TypeName = type,
-                        MethodName = newMethod.Name,
-                        ReturnType = newMethod.ReturnType.FullName,
-                        ParameterTypes = newMethod.Parameters.Select(p => p.ParameterType.FullName).ToList(),
-                        IsPublic = newMethod.IsPublic,
-                        IsPrivate = newMethod.IsPrivate,
-                        HasOverrides = newMethod.HasOverrides,
-                        Parameters = newMethod.Parameters
-                    };
-                    methodList2.Add(methodDetails);
+                        typeMapping.Add(obfuscatedType.FullName, originalType.FullName);
+                    }
                 }
-            }
+                Console.WriteLine($"[TYPES] Matched {typeMapping.Count} types between both assemblies.");
 
-            var methodMatches = FindMethodMatches(methodList1.Distinct().ToList(), methodList2.Distinct().ToList());
-            Dictionary<string, string> methodMapping = new();
-            foreach (var match in methodMatches)
-            {
-                if (!methodMapping.ContainsKey(match.Item1.MethodName))
+                if (typeMapping.Count == 0)
                 {
-                    methodMapping.Add(match.Item1.MethodName, match.Item2.MethodName);
+                    Print("Mapping file is empty or invalid.", ConsoleColor.Red);
+                    return;
                 }
-            }
 
-            var fieldList1 = new List<FieldDetails>();
-            var fieldList2 = new List<FieldDetails>();
-            for (int i = 0; i < typeMapping.Count; i++)
-            {
-                string type = typeMapping.ElementAt(i).Value;
-                foreach (var oldField in oldAssembly.GetType(string.Empty, type).Fields)
+                if (ApplyMapping(dllPath, tmpPath1, typeMapping) == 1)
+                    return;
+
+                //var firstType = oldAssembly.Types.First(t => t.FullName == typeMapping.First().Key);
+                var deobfAssembly = ModuleDefinition.ReadModule(tmpPath1);
+                Console.WriteLine("[INFO] Loading deobfuscated assembly...");
+                var methodList1 = new List<MethodDetails>();
+                var methodList2 = new List<MethodDetails>();
+                for (int i = 0; i < typeMapping.Count; i++)
                 {
-                    var fieldDetails = new FieldDetails
+                    string type = typeMapping.ElementAt(i).Value;
+                    foreach (var oldMethod in oldAssembly.GetType(string.Empty, type).Methods)
                     {
-                        TypeName = type,
-                        FieldName = oldField.Name,
-                        FieldType = oldField.FieldType.FullName,
-                        IsPrivate = oldField.IsPrivate,
-                        IsPublic = oldField.IsPublic,
-                        IsStatic = oldField.IsStatic,
-                        HasConstant = oldField.HasConstant,
-                        HasDefault = oldField.HasDefault,
-                        IsLiteral = oldField.IsLiteral,
-                        IsReadOnly = oldField.IsInitOnly
-                    };
-                    fieldList1.Add(fieldDetails);
-                }
-                foreach (var newField in deobfAssembly.GetType(string.Empty, type).Fields)
-                {
-                    var fieldDetails = new FieldDetails
-                    {
-                        TypeName = type,
-                        FieldName = newField.Name,
-                        FieldType = newField.FieldType.FullName,
-                        IsPrivate = newField.IsPrivate,
-                        IsPublic = newField.IsPublic,
-                        IsStatic = newField.IsStatic,
-                        HasConstant = newField.HasConstant,
-                        HasDefault = newField.HasDefault,
-                        IsLiteral = newField.IsLiteral,
-                        IsReadOnly = newField.IsInitOnly
-                    };
-                    fieldList2.Add(fieldDetails);
-                }
-            }
-
-            var fieldMatches = FindFieldMatches(fieldList1.Distinct().ToList(), fieldList2.Distinct().ToList());
-            Dictionary<string, string> fieldMapping = new();
-            foreach (var match in fieldMatches)
-            {
-                if (!fieldMapping.ContainsKey(match.Item1.FieldName))
-                {
-                    //Console.WriteLine($"{match.Item1.Name} -> {match.Item2.Name}");
-                    fieldMapping.Add(match.Item1.FieldName, match.Item2.FieldName);
-                }
-            }
-
-            deobfAssembly.Dispose();
-
-            var mapping = new[] { typeMapping, methodMapping, fieldMapping }
-            .SelectMany(dict => dict)
-            .GroupBy(pair => pair.Key)
-            .ToDictionary(group => group.Key, group => group.First().Value);
-
-            string tmpPath2 = Guid.NewGuid().ToString() + ".dll";
-
-            if (ApplyMapping(tmpPath1, tmpPath2, mapping) == 1)
-                return;
-
-            File.Delete(tmpPath1);
-
-            var parameterList1 = new List<ParameterDetails>();
-            var parameterList2 = new List<ParameterDetails>();
-            for (int i = 0; i < methodMatches.Count; i++)
-            {
-                foreach (var parameter in methodMatches.ElementAt(i).Item1.Parameters)
-                {
-                    var parameterDetails = new ParameterDetails
-                    {
-                        ParameterName = parameter.Name,
-                        ParameterType = parameter.ParameterType.Name,
-                        IsOut = parameter.IsOut,
-                        IsOptional = parameter.IsOptional,
-                        HasConstant = parameter.HasConstant,
-                        HasDefault = parameter.HasDefault
-                    };
-                    parameterList1.Add(parameterDetails);
-                }
-                foreach (var parameter in methodMatches.ElementAt(i).Item2.Parameters)
-                {
-                    var parameterDetails = new ParameterDetails
-                    {
-                        ParameterName = parameter.Name,
-                        ParameterType = parameter.ParameterType.Name,
-                        IsOut = parameter.IsOut,
-                        IsOptional = parameter.IsOptional,
-                        HasConstant = parameter.HasConstant,
-                        HasDefault = parameter.HasDefault
-                    };
-                    parameterList2.Add(parameterDetails);
-                }
-            }
-
-            Dictionary<string, string> parameterMapping = new();
-            if (parameterList2.Count == parameterList1.Count)
-            {
-                for (int i = 0; i < parameterList2.Count; i++)
-                {
-                    if (parameterList2[i].Equals(parameterList1[i]))
-                    {
-                        if (!parameterMapping.ContainsKey(parameterList1[i].ParameterName))
+                        var methodDetails = new MethodDetails
                         {
-                            //Console.WriteLine($"{parameterList1[i].Name} -> {parameterList2[i].Name}");
-                            parameterMapping.Add(parameterList1[i].ParameterName, parameterList2[i].ParameterName);
+                            TypeName = type,
+                            MethodName = oldMethod.Name,
+                            ReturnType = oldMethod.ReturnType.FullName,
+                            ParameterTypes = oldMethod.Parameters.Select(p => p.ParameterType.FullName).ToList(),
+                            IsPublic = oldMethod.IsPublic,
+                            IsPrivate = oldMethod.IsPrivate,
+                            HasOverrides = oldMethod.HasOverrides,
+                            Parameters = oldMethod.Parameters
+                        };
+                        methodList1.Add(methodDetails);
+                    }
+                    foreach (var newMethod in deobfAssembly.GetType(string.Empty, type).Methods)
+                    {
+                        var methodDetails = new MethodDetails
+                        {
+                            TypeName = type,
+                            MethodName = newMethod.Name,
+                            ReturnType = newMethod.ReturnType.FullName,
+                            ParameterTypes = newMethod.Parameters.Select(p => p.ParameterType.FullName).ToList(),
+                            IsPublic = newMethod.IsPublic,
+                            IsPrivate = newMethod.IsPrivate,
+                            HasOverrides = newMethod.HasOverrides,
+                            Parameters = newMethod.Parameters
+                        };
+                        methodList2.Add(methodDetails);
+                    }
+                }
+
+                var methodMatches = FindMethodMatches(methodList1.Distinct().ToList(), methodList2.Distinct().ToList());
+                Dictionary<string, string> methodMapping = new();
+                foreach (var match in methodMatches)
+                {
+                    if (!methodMapping.ContainsKey(match.Item1.MethodName))
+                    {
+                        methodMapping.Add(match.Item1.MethodName, match.Item2.MethodName);
+                    }
+                }
+
+                var fieldList1 = new List<FieldDetails>();
+                var fieldList2 = new List<FieldDetails>();
+                for (int i = 0; i < typeMapping.Count; i++)
+                {
+                    string type = typeMapping.ElementAt(i).Value;
+                    foreach (var oldField in oldAssembly.GetType(string.Empty, type).Fields)
+                    {
+                        var fieldDetails = new FieldDetails
+                        {
+                            TypeName = type,
+                            FieldName = oldField.Name,
+                            FieldType = oldField.FieldType.FullName,
+                            IsPrivate = oldField.IsPrivate,
+                            IsPublic = oldField.IsPublic,
+                            IsStatic = oldField.IsStatic,
+                            HasConstant = oldField.HasConstant,
+                            HasDefault = oldField.HasDefault,
+                            IsLiteral = oldField.IsLiteral,
+                            IsReadOnly = oldField.IsInitOnly
+                        };
+                        fieldList1.Add(fieldDetails);
+                    }
+                    foreach (var newField in deobfAssembly.GetType(string.Empty, type).Fields)
+                    {
+                        var fieldDetails = new FieldDetails
+                        {
+                            TypeName = type,
+                            FieldName = newField.Name,
+                            FieldType = newField.FieldType.FullName,
+                            IsPrivate = newField.IsPrivate,
+                            IsPublic = newField.IsPublic,
+                            IsStatic = newField.IsStatic,
+                            HasConstant = newField.HasConstant,
+                            HasDefault = newField.HasDefault,
+                            IsLiteral = newField.IsLiteral,
+                            IsReadOnly = newField.IsInitOnly
+                        };
+                        fieldList2.Add(fieldDetails);
+                    }
+                }
+
+                var fieldMatches = FindFieldMatches(fieldList1.Distinct().ToList(), fieldList2.Distinct().ToList());
+                Dictionary<string, string> fieldMapping = new();
+                foreach (var match in fieldMatches)
+                {
+                    if (!fieldMapping.ContainsKey(match.Item1.FieldName))
+                    {
+                        //Console.WriteLine($"{match.Item1.Name} -> {match.Item2.Name}");
+                        fieldMapping.Add(match.Item1.FieldName, match.Item2.FieldName);
+                    }
+                }
+
+                deobfAssembly.Dispose();
+
+                var mapping = new[] { typeMapping, methodMapping, fieldMapping }
+                .SelectMany(dict => dict)
+                .GroupBy(pair => pair.Key)
+                .ToDictionary(group => group.Key, group => group.First().Value);
+
+                string tmpPath2 = Guid.NewGuid().ToString() + ".dll";
+
+                if (ApplyMapping(tmpPath1, tmpPath2, mapping) == 1)
+                    return;
+
+                File.Delete(tmpPath1);
+
+                var parameterList1 = new List<ParameterDetails>();
+                var parameterList2 = new List<ParameterDetails>();
+                for (int i = 0; i < methodMatches.Count; i++)
+                {
+                    foreach (var parameter in methodMatches.ElementAt(i).Item1.Parameters)
+                    {
+                        var parameterDetails = new ParameterDetails
+                        {
+                            ParameterName = parameter.Name,
+                            ParameterType = parameter.ParameterType.Name,
+                            IsOut = parameter.IsOut,
+                            IsOptional = parameter.IsOptional,
+                            HasConstant = parameter.HasConstant,
+                            HasDefault = parameter.HasDefault
+                        };
+                        parameterList1.Add(parameterDetails);
+                    }
+                    foreach (var parameter in methodMatches.ElementAt(i).Item2.Parameters)
+                    {
+                        var parameterDetails = new ParameterDetails
+                        {
+                            ParameterName = parameter.Name,
+                            ParameterType = parameter.ParameterType.Name,
+                            IsOut = parameter.IsOut,
+                            IsOptional = parameter.IsOptional,
+                            HasConstant = parameter.HasConstant,
+                            HasDefault = parameter.HasDefault
+                        };
+                        parameterList2.Add(parameterDetails);
+                    }
+                }
+
+                Dictionary<string, string> parameterMapping = new();
+                if (parameterList2.Count == parameterList1.Count)
+                {
+                    for (int i = 0; i < parameterList2.Count; i++)
+                    {
+                        if (parameterList2[i].Equals(parameterList1[i]))
+                        {
+                            if (!parameterMapping.ContainsKey(parameterList1[i].ParameterName))
+                            {
+                                //Console.WriteLine($"{parameterList1[i].Name} -> {parameterList2[i].Name}");
+                                parameterMapping.Add(parameterList1[i].ParameterName, parameterList2[i].ParameterName);
+                            }
                         }
                     }
                 }
+
+                if (ApplyMapping(tmpPath2, outputPath, parameterMapping) == 1)
+                    return;
+
+                File.Delete(tmpPath2);
+
+                using (StreamWriter writer = new StreamWriter(mappingPath))
+                {
+                    foreach (KeyValuePair<string, string> kvp in typeMapping)
+                    {
+                        if (minifiedMapping && kvp.Key == kvp.Value) continue;
+                        writer.WriteLine($"{kvp.Key} -> {kvp.Value}");
+                    }
+                    foreach (KeyValuePair<string, string> kvp in methodMapping)
+                    {
+                        if (minifiedMapping && kvp.Key == kvp.Value) continue;
+                        writer.WriteLine($"{kvp.Key} -> {kvp.Value}");
+                    }
+                    foreach (KeyValuePair<string, string> kvp in fieldMapping)
+                    {
+                        if (minifiedMapping && kvp.Key == kvp.Value) continue;
+                        writer.WriteLine($"{kvp.Key} -> {kvp.Value}");
+                    }
+                    foreach (KeyValuePair<string, string> kvp in parameterMapping)
+                    {
+                        if (minifiedMapping && kvp.Key == kvp.Value) continue;
+                        writer.WriteLine($"{kvp.Key} -> {kvp.Value}");
+                    }
+                }
+                Console.WriteLine($"Mapping dictionaries written to file: {mappingPath}");
+
+                // rpcMatcher
+                //GetInherits(outputPath, "OutRpc", "out_rpcs.txt");
+                //GetInherits(outputPath, "InRpc", "in_rpcs.txt");
             }
-
-            if (ApplyMapping(tmpPath2, outputPath, parameterMapping) == 1)
-                return;
-
-            File.Delete(tmpPath2);
-
-            string filePath = Path.Combine(Directory.GetCurrentDirectory(), mappingFilePath);
-            using (StreamWriter writer = new StreamWriter(filePath))
+            else
             {
-                foreach (KeyValuePair<string, string> kvp in typeMapping)
+                Console.WriteLine("Reading custom mapping file...");
+                Dictionary<string, string> mappings = new();
+                using (StreamReader reader = new StreamReader(mappingPath))
                 {
-                    if (minifiedMapping && kvp.Key == kvp.Value) continue;
-                    writer.WriteLine($"{kvp.Key} -> {kvp.Value}");
+                    while (reader.Peek() >= 0)
+                    {
+                        string? line = reader.ReadLine();
+                        if (line != null)
+                        {
+                            if (!mappings.ContainsKey(line.Split(" -> ")[0]))
+                            {
+                                mappings.Add(line.Split(" -> ")[0], line.Split(" -> ")[1]);
+                            }
+                        }
+                    }
                 }
-                foreach (KeyValuePair<string, string> kvp in methodMapping)
-                {
-                    if (minifiedMapping && kvp.Key == kvp.Value) continue;
-                    writer.WriteLine($"{kvp.Key} -> {kvp.Value}");
-                }
-                foreach (KeyValuePair<string, string> kvp in fieldMapping)
-                {
-                    if (minifiedMapping && kvp.Key == kvp.Value) continue;
-                    writer.WriteLine($"{kvp.Key} -> {kvp.Value}");
-                }
-                foreach (KeyValuePair<string, string> kvp in parameterMapping)
-                {
-                    if (minifiedMapping && kvp.Key == kvp.Value) continue;
-                    writer.WriteLine($"{kvp.Key} -> {kvp.Value}");
-                }
-            }
-            Console.WriteLine($"Mapping dictionaries written to file: {filePath}");
 
-            // rpcMatcher
-            //GetInherits(outputPath, "OutRpc", "out_rpcs.txt");
-            //GetInherits(outputPath, "InRpc", "in_rpcs.txt");
+                Console.WriteLine("Applying mappings to output file...");
+                if (ApplyMapping(dllPath, outputPath, mappings) == 1)
+                    return;
+
+                Console.WriteLine($"Output assembled to file: {outputPath}");
+            }
         }
 
         private static void GetInherits(string dllPath, string baseTypeName, string outputFile)
@@ -793,6 +828,7 @@ namespace dnMatcher
             Print("  -d, --dll", ConsoleColor.Yellow); Print("          Path to the obfuscated DLL file"); Print(" (required)\n", ConsoleColor.Yellow);
             Print("  -m, --mapping", ConsoleColor.Yellow); Print("      Path to the output mapping file"); Print(" (required)\n", ConsoleColor.Yellow);
             Print("  -o, --output", ConsoleColor.Yellow); Print("       Path to the output file"); Print(" (required)\n", ConsoleColor.Yellow);
+            Console.WriteLine("  --custom           Enables using a custom mapping file (bypasses mapping creation)");
             Console.WriteLine("  --debug            Enable debug logging");
             Console.WriteLine("  --ignore-errors    Ignore errors during deobfuscation (recommended for Cpp2Il DLLs)");
             Console.WriteLine("  --minified-mapping Skip repeated names on both sides of the mapping");
